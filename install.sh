@@ -1580,6 +1580,24 @@ check_digest() {
   esac
 }
 
+# Keep the database's own error in both terminal and browser progress logs.
+# Use the container name so diagnostics also work outside the install directory.
+show_migration_logs() {
+  local logs line
+  if ! logs="$(docker logs --tail 50 leera-selfhost-migrate 2>&1)"; then
+    warn "could not read the migrator log. Check: docker logs --tail 150 leera-selfhost-migrate"
+    return 0
+  fi
+  if [ -z "$logs" ]; then
+    warn "the migrator did not write any log output"
+    return 0
+  fi
+  say "Database migrator output:"
+  while IFS= read -r line; do
+    say "$line"
+  done <<<"$logs"
+}
+
 # Run the one-shot migrator and wait for it, so "updating the database" is a
 # visible stage rather than something hidden inside a dependency condition.
 run_migrations() {
@@ -1592,7 +1610,7 @@ run_migrations() {
   # into a dead end.
   local up_out
   if ! up_out="$($COMPOSE up -d migrate 2>&1)"; then
-    fail "the database migrator could not be started. Nothing has been changed.
+    fail "the database migrator could not be started. Application containers have not been restarted.
         Compose said: $(printf '%s' "$up_out" | grep -v '^ *$' | tail -n 3)"
   fi
 
@@ -1602,16 +1620,20 @@ run_migrations() {
     case "$state" in
       "false "*)
         code="${state#false }"
-        [ "$code" = "0" ] || fail "the database update failed (exit $code). Nothing else has been
-        changed — this instance is still on its previous version.
-        Check: $COMPOSE logs migrate"
+        if [ "$code" != "0" ]; then
+          show_migration_logs
+          fail "the database update failed (exit $code). Application containers have not been restarted.
+        Database changes already applied are not undone.
+        Check: docker logs --tail 150 leera-selfhost-migrate"
+        fi
         step_done migrate
         return 0
         ;;
     esac
     sleep 2
   done
-  fail "the database update is still running after 30 minutes. Check: $COMPOSE logs migrate"
+  show_migration_logs
+  fail "the database update is still running after 30 minutes. Check: docker logs --tail 150 leera-selfhost-migrate"
 }
 
 # Put the previous version back. Images only: migrations are not reversible,

@@ -156,7 +156,7 @@ STEPS_TEMPLATE='[
 ]'
 
 JOB_ID=""; TOKEN=""; TARGET=""; FROM_VERSION=""
-STATUS="running"; STEP="preflight"; MESSAGE=""
+STATUS="running"; STEP="preflight"; MESSAGE=""; ERROR_MESSAGE=""
 STARTED_AT=0; FINISHED_AT="null"
 STEPS_JSON="$STEPS_TEMPLATE"
 LOG_FILE=""
@@ -220,6 +220,9 @@ handle_line() {
         ;;
       log)
         local msg; msg="$(jq -r '.message // ""' <<<"$line")"
+        if [ "$(jq -r '.level // ""' <<<"$line")" = "error" ] && [ -n "$msg" ]; then
+          ERROR_MESSAGE="$msg"
+        fi
         [ -n "$msg" ] && { MESSAGE="$msg"; append_log "$msg"; }
         ;;
       *)
@@ -284,7 +287,7 @@ run_update() {
 
   STATE_FILE="$DOCROOT/$TOKEN.json"
   LOG_FILE="$(mktemp)"
-  STATUS="running"; STEP="preflight"; MESSAGE="Starting"
+  STATUS="running"; STEP="preflight"; MESSAGE="Starting"; ERROR_MESSAGE=""
   STEPS_JSON="$STEPS_TEMPLATE"
   STARTED_AT="$(date -u +%s)"; FINISHED_AT="null"
   BACKUP_PATH=""
@@ -336,10 +339,9 @@ run_update() {
     finish "success" "Updated to $TARGET"
   else
     set_step "$STEP" "failed"
-    # install.sh reverts the version tag and restarts on a failed health check;
-    # its own output says which happened, and that output is in the log the
-    # page shows.
-    finish "failed" "The update did not complete. The site is running the version it was on before."
+    # Only the installer knows whether a rollback was attempted and succeeded.
+    # Preserve its failure instead of claiming the previous version is running.
+    finish "failed" "${ERROR_MESSAGE:-The update did not complete. Check the update log and server status before retrying.}"
   fi
 
   rm -f "$LOG_FILE"
